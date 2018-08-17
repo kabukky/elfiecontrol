@@ -4,22 +4,36 @@ import (
 	"encoding/hex"
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
+
+	"github.com/go-gl/glfw/v3.2/glfw"
 )
 
 var (
-	messageRate = 25 * time.Millisecond
+	messageRate  = 25 * time.Millisecond
+	power        = float32(0.3) // steering values will by multiplied by this
+	stopSteering = false
 
 	// All data without checksum. Will be calculated before sending
-	stopData, _       = hex.DecodeString("ff087e3f403f901010a0")
-	controlsOnData, _ = hex.DecodeString("ff08003f403f10101000")
-	hoverOnData, _    = hex.DecodeString("ff087e3f403f90101000")
-	rotorOnData, _    = hex.DecodeString("ff087e3f403f90101040")
-	flyUpStartData, _ = hex.DecodeString("ff08903b403f90101040")
-	flyUpHighData, _  = hex.DecodeString("ff08c43b403f90101000")
+	steeringDummyData, _ = hex.DecodeString("ff080000000090101000")
+	stopData, _          = hex.DecodeString("ff087e3f403f901010a0")
+	controlsOnData, _    = hex.DecodeString("ff08003f403f10101000")
+	hoverOnData, _       = hex.DecodeString("ff087e3f403f90101000")
+	rotorOnData, _       = hex.DecodeString("ff087e3f403f90101040")
+	flyUpStartData, _    = hex.DecodeString("ff08903b403f90101040")
+	flyUpHighData, _     = hex.DecodeString("ff08c43b403f90101000")
 )
 
 func main() {
+	// Initialize glfw (need for joystick input)
+	err := glfw.Init()
+	if err != nil {
+		panic(err)
+	}
+	defer glfw.Terminate()
 	// Create connection
 	conn, err := net.Dial("udp", "172.16.10.1:8080")
 	if err != nil {
@@ -31,38 +45,47 @@ func main() {
 	sendMessageDuration(controlsOnData, conn, 2*time.Second)
 	sendMessageDuration(hoverOnData, conn, 2*time.Second)
 
-	// Send rotor on data
-	log.Println("Sending rotor on data")
-	sendMessageDuration(rotorOnData, conn, 4*time.Second)
+	sendMessageDuration(rotorOnData, conn, 2*time.Second)
 
-	// Send fly up on data
-	log.Println("Sending fly up data")
-	//flyUp(conn)
-	sendMessageDuration(flyUpHighData, conn, 4*time.Second)
+	// Catch SIGTERM
+	c := make(chan os.Signal, 2)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		// Send Stop data
+		stopSteering = true
+		sendStopData(conn)
+		log.Println("Exiting")
+		os.Exit(1)
+	}()
 
-	// Send Stop data
-	log.Println("Sending stop data")
-	sendMessageDuration(stopData, conn, 2*time.Second)
-
-	log.Println("Done sending data")
+	for !stopSteering {
+		// Send joystick command
+		sendSteeringCommand(conn)
+		time.Sleep(messageRate)
+	}
+	sendStopData(conn)
 }
 
-func flyUp(conn net.Conn) {
-	// Increase speed 36 times. Each time by 2.
-	accelerationTimes := 24
-	for i := 0; i < accelerationTimes; i++ {
-		if i != 0 {
-			flyUpStartData[2] = flyUpStartData[2] + 2
-			flyUpStartData[10] = flyUpStartData[10] - 2
-		}
-		log.Println("Sending loop ", i)
-		duration := 50 * time.Millisecond
-		if i == (accelerationTimes - 1) {
-			duration = 5000 * time.Millisecond
-		}
-		sendMessageDuration(flyUpStartData, conn, duration)
+func sendStopData(conn net.Conn) {
+	log.Println("Sending stop data")
+	sendMessageDuration(stopData, conn, 500*time.Millisecond)
+}
+
+func sendSteeringCommand(conn net.Conn) {
+	if glfw.GetJoystickButtons(glfw.Joystick1)[0] == 1 {
+		stopSteering = true
+		sendStopData(conn)
+		return
 	}
-	return
+	axes := glfw.GetJoystickAxes(glfw.Joystick1)
+	log.Println("Axes: ", axes)
+	// Fit -1 to 1 range of joystick into 0 to 255 range of drone
+	steeringDummyData[2] = uint8((-axes[1] + 1) * 127.5)
+	steeringDummyData[3] = uint8(((axes[0] + 1) * 127.5) / 2)
+	steeringDummyData[4] = uint8(((axes[3] + 1) * 127.5) / 2)
+	steeringDummyData[5] = uint8(((axes[2] + 1) * 127.5) / 2)
+	sendMessage(steeringDummyData, conn)
 }
 
 func sendMessageDuration(message []byte, conn net.Conn, duration time.Duration) {
