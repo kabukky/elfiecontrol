@@ -23,8 +23,8 @@ var (
 	controlsOnData, _    = hex.DecodeString("ff08003f403f10101000")
 	hoverOnData, _       = hex.DecodeString("ff087e3f403f90101000")
 	rotorOnData, _       = hex.DecodeString("ff087e3f403f90101040")
-	flyUpStartData, _    = hex.DecodeString("ff08903b403f90101040")
-	flyUpHighData, _     = hex.DecodeString("ff08c43b403f90101000")
+	gyroCalibData, _     = hex.DecodeString("ff08003f403f50101000")
+	compassActiveData, _ = hex.DecodeString("ff087e3f403f90101010") // No idea what this is for
 )
 
 func main() {
@@ -42,6 +42,7 @@ func main() {
 
 	// Send Idle data
 	log.Println("Sending prepare data")
+	sendMessageDuration(gyroCalibData, conn, 2*time.Second)
 	sendMessageDuration(controlsOnData, conn, 2*time.Second)
 	sendMessageDuration(hoverOnData, conn, 2*time.Second)
 
@@ -73,6 +74,10 @@ func sendStopData(conn net.Conn) {
 }
 
 func sendSteeringCommand(conn net.Conn) {
+	if !glfw.JoystickPresent(glfw.Joystick1) {
+		log.Println("No gamepad present.")
+		return
+	}
 	if glfw.GetJoystickButtons(glfw.Joystick1)[0] == 1 {
 		stopSteering = true
 		sendStopData(conn)
